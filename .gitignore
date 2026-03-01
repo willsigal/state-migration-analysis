@@ -1,0 +1,19 @@
+# Large generated outputs
+output/
+raw_files/
+state_to_state_migration_all_cells.csv
+debug_map.png
+*.mp4
+*.gif
+*.webm
+
+# Python / notebook
+__pycache__/
+.ipynb_checkpoints/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
+# Accidental scratch artifact
+{console.error(e)

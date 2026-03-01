@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>US Migration Dot Flows</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+  <style>
+    :root{
+      --bg:#eef1f4;--water:#e7edf2;--land:#f4f6f8;--state:#f8f9fa;--stateSel:#dde5ed;
+      --border:#9fa9b3;--borderStrong:#3f4b56;--panel:#fbfdffeb;--panelB:#c7d0d8;
+      --txt:#213142;--dim:#5c6f82;--accent:#2f6ea3;--good:#2f8c5c;--bad:#b54b4b;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;font-family:"Segoe UI",sans-serif;background:var(--bg);color:var(--txt)}
+    .stage{position:fixed;inset:0;background:radial-gradient(circle at 14% 16%,#ffffffa8,transparent 38%),radial-gradient(circle at 86% 82%,#d9e2ea8a,transparent 44%),var(--water)}
+    .layer{position:absolute;inset:0;width:100%;height:100%;display:block}
+    #mapBase{z-index:1}#flowCanvas{z-index:2;pointer-events:none}#mapOverlay{z-index:3}
+    .panel{position:fixed;left:14px;top:14px;z-index:5;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:var(--panel);border:1px solid var(--panelB);border-radius:11px;padding:13px;box-shadow:0 12px 28px #19232f24}
+    h1{margin:0;font-size:1.04rem} .sub{margin:6px 0 11px;color:var(--dim);font-size:.8rem;line-height:1.35}
+    .status{margin:0 0 7px;min-height:1.2em;color:#35658f;font-size:.78rem}
+    .status.context{margin:0 0 11px;color:#607487;font-size:.74rem}
+    .ctl{margin-bottom:10px}.ctl label{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:.77rem;color:#4f6276}
+    .badge{padding:2px 8px;border-radius:999px;background:#e5ebf1;color:#2a3a4b;font-weight:700;font-size:.72rem}
+    input[type="range"]{width:100%;accent-color:var(--accent)}
+    select,button{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #c5cfda;background:#f8fafc;color:#233445;font-size:.84rem}
+    button{cursor:pointer} button:hover{background:#f0f4f8}
+    .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px}
+    .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+    .stat{padding:8px;border:1px solid #d6dee6;border-radius:8px;background:#fafcfe}
+    .stat h4{margin:0;color:#5f7388;font-size:.68rem;font-weight:500;text-transform:uppercase}
+    .stat p{margin:5px 0 0;font-size:.93rem;font-weight:700}
+    .stat.positive p{color:var(--good)} .stat.negative p{color:var(--bad)}
+    .dirLegend{display:flex;gap:12px;align-items:center;margin:2px 0 10px;color:#52667a;font-size:.74rem}
+    .sw{display:inline-flex;align-items:center;gap:6px}
+    .sw::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%}
+    .sw.in::before{background:#4f7597}
+    .sw.out::before{background:#9a6d4f}
+    .corr{margin-top:10px}.corr h3{margin:0 0 6px;color:#5f7388;font-size:.77rem;font-weight:500}
+    .corr ol{margin:0;padding:0;list-style:none;color:#304152;font-size:.76rem;line-height:1.42}
+    .corr li{padding:6px 8px;border:1px solid #d8e0e8;border-radius:7px;background:#f9fbfd;margin-bottom:6px;cursor:pointer;position:relative;overflow:hidden}
+    .corr li:hover{background:#f0f5fa}
+    .corr li.active{border-color:#9db3c9;background:#eef4fa}
+    .corr .bar{position:absolute;left:0;top:0;bottom:0;background:#dbe7f2;opacity:.55;pointer-events:none}
+    .corr .txt{position:relative;z-index:1}
+    .hint{margin:10px 0 0;padding-top:9px;border-top:1px solid #d6dee6;color:#5f7388;font-size:.72rem;line-height:1.35}
+    .nation{fill:var(--land);stroke:#c4ccd3;stroke-width:1.1}
+    .sfill{fill:var(--state)} .sline{fill:none;stroke:var(--border);stroke-width:1;vector-effect:non-scaling-stroke}
+    .sline.off{stroke:#bec6ce}.sline.on{cursor:pointer}
+    .slabel{fill:#5f6e7b;font-size:9px;font-weight:600;text-anchor:middle;paint-order:stroke;stroke:#ffffffe8;stroke-width:2.4px;pointer-events:none}
+    .slabel.small{font-size:8px}
+    @media (max-width:900px){.panel{left:8px;top:8px;width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px)}}
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <svg id="mapBase" class="layer"></svg>
+    <canvas id="flowCanvas" class="layer"></canvas>
+    <svg id="mapOverlay" class="layer"></svg>
+  </div>
+  <aside class="panel">
+    <h1>US State-to-State Migration</h1>
+    <p class="sub">Dot arcs are volume-weighted: higher migration creates thicker bands and denser dot flow.</p>
+    <p id="status" class="status">Loading map + migration data...</p>
+    <p id="contextLine" class="status context">Hover a state or corridor for detail.</p>
+    <div class="ctl"><label for="yearSlider">Year <span id="yearBadge" class="badge">-</span> <span id="periodBadge" class="badge">P1/12</span></label><input id="yearSlider" type="range" min="0" max="0" value="0" step="1" /></div>
+    <div class="row"><button id="playBtn" type="button">Play</button><button id="resetBtn" type="button">Reset Filters</button><button id="clearCorridorBtn" type="button">Clear Focus</button></div>
+    <div class="ctl"><label for="stateSelect">State</label><select id="stateSelect"></select></div>
+    <div class="ctl"><label for="modeSelect">Direction</label><select id="modeSelect"><option value="both">In + Out</option><option value="out">Outflow Only</option><option value="in">Inflow Only</option></select></div>
+    <div class="dirLegend"><span class="sw in">Inflow</span><span class="sw out">Outflow</span></div>
+    <div class="ctl"><label for="topNSlider">Visible Corridors <span id="topNBadge" class="badge">180</span></label><input id="topNSlider" type="range" min="30" max="320" value="180" step="10" /></div>
+    <div class="ctl"><label for="densitySlider">Dot Density <span id="densityBadge" class="badge">1.6x</span></label><input id="densitySlider" type="range" min="0.5" max="2.8" value="1.6" step="0.1" /></div>
+    <div class="ctl"><label for="speedSlider">Dot Speed <span id="speedBadge" class="badge">1.0x</span></label><input id="speedSlider" type="range" min="0.6" max="2.2" value="1.0" step="0.1" /></div>
+    <section class="stats">
+      <article class="stat"><h4>Visible Migrants (Annual)</h4><p id="visibleMigrants">-</p></article>
+      <article class="stat"><h4>Visible Corridors</h4><p id="visibleCorridors">-</p></article>
+      <article class="stat"><h4>Inflow (Annual)</h4><p id="inflowValue">-</p></article>
+      <article class="stat"><h4>Outflow (Annual)</h4><p id="outflowValue">-</p></article>
+      <article id="netCard" class="stat"><h4>Net (Annual)</h4><p id="netValue">-</p></article>
+      <article class="stat"><h4>Total Year Volume (Annual)</h4><p id="yearVolumeValue">-</p></article>
+    </section>
+    <section class="corr"><h3>Top Visible Corridors (Annual)</h3><ol id="topCorridors"></ol></section>
+    <p class="hint">Click state boundaries to focus. Inflow and outflow are split onto different arc lanes to reduce overlap.</p>
+  </aside>
+  <script>
+    const FIPS={"01":"Alabama","02":"Alaska","04":"Arizona","05":"Arkansas","06":"California","08":"Colorado","09":"Connecticut","10":"Delaware","11":"District of Columbia","12":"Florida","13":"Georgia","15":"Hawaii","16":"Idaho","17":"Illinois","18":"Indiana","19":"Iowa","20":"Kansas","21":"Kentucky","22":"Louisiana","23":"Maine","24":"Maryland","25":"Massachusetts","26":"Michigan","27":"Minnesota","28":"Mississippi","29":"Missouri","30":"Montana","31":"Nebraska","32":"Nevada","33":"New Hampshire","34":"New Jersey","35":"New Mexico","36":"New York","37":"North Carolina","38":"North Dakota","39":"Ohio","40":"Oklahoma","41":"Oregon","42":"Pennsylvania","44":"Rhode Island","45":"South Carolina","46":"South Dakota","47":"Tennessee","48":"Texas","49":"Utah","50":"Vermont","51":"Virginia","53":"Washington","54":"West Virginia","55":"Wisconsin","56":"Wyoming","72":"Puerto Rico","60":"American Samoa","66":"Guam","69":"Northern Mariana Islands","78":"US Virgin Islands"};
+    const ABBR={"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","District of Columbia":"DC","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Puerto Rico":"PR","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY"};
+    const app={projection:d3.geoAlbersUsa(),path:d3.geoPath(),nation:null,states:[],centroids:new Map(),statesSet:new Set(),colors:new Map(),flowsByYear:new Map(),totalsByYearState:new Map(),yearTotals:new Map(),years:[],yearIdx:0,state:"ALL",mode:"both",topN:180,density:1.6,speed:1,activeFlows:[],routes:new Map(),particles:[],w:0,h:0,dpr:Math.max(1,window.devicePixelRatio||1),play:false,periodCount:12,periodIdx:0,periodT:0,periodSec:.45,hoverCorridor:null,focusCorridor:null,basePaths:null,overlayPaths:null,skipped:0};
+    const MAX_PART=42000,EASE=7.8,DOT_RADIUS=1.35,DIR_RGB={in:[79,117,151],out:[154,109,79]},fmtN=new Intl.NumberFormat("en-US"),fmtC=new Intl.NumberFormat("en-US",{notation:"compact",maximumFractionDigits:1});
+    const stage=document.getElementById("stage"),canvas=document.getElementById("flowCanvas"),ctx=canvas.getContext("2d",{alpha:true});
+    const base=d3.select("#mapBase"),ov=d3.select("#mapOverlay");
+    const qp=new URLSearchParams(window.location.search);
+    const exportMode=qp.get("export")==="1"||qp.get("ui")==="0"||qp.get("panel")==="0";
+    if(exportMode){const panel=document.querySelector(".panel");if(panel)panel.style.display="none";}
+    const el={status:document.getElementById("status"),contextLine:document.getElementById("contextLine"),yearSlider:document.getElementById("yearSlider"),yearBadge:document.getElementById("yearBadge"),periodBadge:document.getElementById("periodBadge"),playBtn:document.getElementById("playBtn"),resetBtn:document.getElementById("resetBtn"),clearCorridorBtn:document.getElementById("clearCorridorBtn"),stateSelect:document.getElementById("stateSelect"),modeSelect:document.getElementById("modeSelect"),topNSlider:document.getElementById("topNSlider"),topNBadge:document.getElementById("topNBadge"),densitySlider:document.getElementById("densitySlider"),densityBadge:document.getElementById("densityBadge"),speedSlider:document.getElementById("speedSlider"),speedBadge:document.getElementById("speedBadge"),visibleMigrants:document.getElementById("visibleMigrants"),visibleCorridors:document.getElementById("visibleCorridors"),inflowValue:document.getElementById("inflowValue"),outflowValue:document.getElementById("outflowValue"),netValue:document.getElementById("netValue"),netCard:document.getElementById("netCard"),yearVolumeValue:document.getElementById("yearVolumeValue"),topCorridors:document.getElementById("topCorridors")};
+
+    const yearVal=()=>app.years[app.yearIdx];
+    const setStatus=(t)=>el.status.textContent=t;
+    const setContext=(t)=>el.contextLine.textContent=t;
+    function makeColors(states){const m=new Map();[...states].sort((a,b)=>a.localeCompare(b)).forEach((s,i)=>m.set(s,{h:(i*137.508)%360,s:40,l:46}));return m}
+    function color(st,a=1){const c=app.colors.get(st)||{h:210,s:32,l:44};return `hsla(${c.h.toFixed(1)},${c.s}%,${c.l}%,${a})`}
+    function rgbA(arr,a){return `rgba(${arr[0]},${arr[1]},${arr[2]},${a})`}
+    function flowDir(f){if(app.state!=="ALL"){if(f.to===app.state)return"in";if(f.from===app.state)return"out"}if(app.mode==="in")return"in";if(app.mode==="out")return"out";return"neutral"}
+    function laneBias(f){if(app.state!=="ALL"&&app.mode==="both"){if(f.from===app.state)return 1;if(f.to===app.state)return-1}return f.from<f.to?1:-1}
+    function routeIntensity(r){let m=1;if(app.focusCorridor&&r.key!==app.focusCorridor)m*=0.35;if(app.hoverCorridor){if(r.key===app.hoverCorridor)m*=1.45;else m*=0.55}return m}
+    function routePaint(r,a){const k=Math.max(0,Math.min(1,a*routeIntensity(r)));if(r.dir==="in")return rgbA(DIR_RGB.in,k);if(r.dir==="out")return rgbA(DIR_RGB.out,k);return color(r.col,k)}
+    function corridorLabel(f){const d=flowDir(f),tag=d==="in"?"IN":d==="out"?"OUT":"FLOW";return `[${tag}] ${f.from} -> ${f.to}: ${fmtN.format(Math.round(f.value))}/yr`}
+    function stateSummary(name){const y=yearVal(),m=app.totalsByYearState.get(y)||new Map(),r=m.get(name)||{in:0,out:0},net=r.in-r.out;return `${name} | In ${fmtC.format(Math.round(r.in))}/yr | Out ${fmtC.format(Math.round(r.out))}/yr | Net ${net>=0?"+":""}${fmtC.format(Math.round(net))}/yr`}
+    function bezP(r,t){const o=1-t;return{x:o*o*r.p0.x+2*o*t*r.p1.x+t*t*r.p2.x,y:o*o*r.p0.y+2*o*t*r.p1.y+t*t*r.p2.y}}
+    function bezT(r,t){const dx=2*(1-t)*(r.p1.x-r.p0.x)+2*t*(r.p2.x-r.p1.x),dy=2*(1-t)*(r.p1.y-r.p0.y)+2*t*(r.p2.y-r.p1.y),L=Math.hypot(dx,dy)||1;return{x:dx/L,y:dy/L}}
+    function badges(){el.yearBadge.textContent=String(yearVal()||"-");el.periodBadge.textContent=`P${app.periodIdx+1}/${app.periodCount}`;el.topNBadge.textContent=String(app.topN);el.densityBadge.textContent=`${app.density.toFixed(1)}x`;el.speedBadge.textContent=`${app.speed.toFixed(1)}x`}
+    function stopPlay(){app.play=false;el.playBtn.textContent="Play"}
+    function togglePlay(){app.play=!app.play;el.playBtn.textContent=app.play?"Pause":"Play"}
+
+    function recalcCentroids(){app.centroids.clear();app.states.forEach(f=>{const n=f.properties.name,c=app.path.centroid(f);if(n&&Number.isFinite(c[0])&&Number.isFinite(c[1]))app.centroids.set(n,{x:c[0],y:c[1]})})}
+    function focusMap(){
+      if(!app.basePaths||!app.overlayPaths)return;
+      app.basePaths.attr("fill",d=>!app.statesSet.has(d.properties.name)?"#f0f2f4":(app.state!=="ALL"&&d.properties.name===app.state?"var(--stateSel)":"var(--state)"));
+      app.overlayPaths.attr("stroke",d=>!app.statesSet.has(d.properties.name)?"#bec6ce":(app.state!=="ALL"&&d.properties.name===app.state?"var(--borderStrong)":"var(--border)")).attr("stroke-width",d=>app.state!=="ALL"&&d.properties.name===app.state?1.8:1);
+    }
+    function labelData(){return app.states.filter(f=>app.statesSet.has(f.properties.name)).map(f=>{const n=f.properties.name,c=app.centroids.get(n);if(!c)return null;return{abbr:ABBR[n]||"",x:c.x,y:c.y,small:app.path.area(f)<360}}).filter(Boolean)}
+    function drawMap(){
+      base.selectAll("*").remove();ov.selectAll("*").remove();
+      base.append("path").datum(app.nation).attr("class","nation").attr("d",app.path);
+      app.basePaths=base.append("g").selectAll("path").data(app.states).join("path").attr("class","sfill").attr("d",app.path);
+      app.overlayPaths=ov.append("g").selectAll("path").data(app.states).join("path").attr("class",d=>app.statesSet.has(d.properties.name)?"sline on":"sline off").attr("d",app.path).on("mouseenter",(_,d)=>{const n=d.properties.name;if(!app.statesSet.has(n))return;setContext(stateSummary(n))}).on("mouseleave",()=>setContext("Hover a state or corridor for detail.")).on("click",(_,d)=>{const n=d.properties.name;if(!app.statesSet.has(n))return;app.state=app.state===n?"ALL":n;el.stateSelect.value=app.state;rebuild()});
+      ov.append("g").selectAll("text").data(labelData()).join("text").attr("class",d=>d.small?"slabel small":"slabel").attr("x",d=>d.x).attr("y",d=>d.y+2).text(d=>d.abbr);
+      focusMap();
+    }
+    const matchFlow=(f)=>app.state==="ALL"||(app.mode==="both"?(f.from===app.state||f.to===app.state):(app.mode==="out"?f.from===app.state:f.to===app.state));
+
+    function setRouteTargets(r,f,n){n=Math.max(.01,n);r.from=f.from;r.to=f.to;r.value=f.value;r.col=f.from;r.dir=flowDir(f);r.side=laneBias(f);r.tw=n;r.tSpawn=4+n*140;r.tW=0.9+Math.pow(n,.65)*9.3;r.tDot=1;r.tSpread=1.2+Math.pow(n,.9)*15;r.tSpeed=.19+n*.33;r.lineA=.06+n*.28;r.dotA=.34+n*.42;if(r.dir!=="neutral"){r.lineA+=.08;r.dotA+=.08}}
+    function createRoute(f,maxV){
+      const a=app.centroids.get(f.from),b=app.centroids.get(f.to);if(!a||!b)return null;
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy);if(!Number.isFinite(d)||d<2)return null;
+      const n=Math.max(.01,f.value/maxV),mx=(a.x+b.x)/2,my=(a.y+b.y)/2,nx=-dy/d,ny=dx/d,sgn=laneBias(f),boost=(app.state!=="ALL"&&app.mode==="both")?2.2:1,curve=Math.min(108,d*(.2+.17*n)),lane=(1.5+4.8*n)*sgn*boost;
+      const r={key:`${f.from}|${f.to}`,p0:{x:a.x+nx*lane,y:a.y+ny*lane},p1:{x:mx+nx*(curve*sgn+lane*.7),y:my+ny*(curve*sgn+lane*.7)},p2:{x:b.x+nx*lane,y:b.y+ny*lane},from:f.from,to:f.to,value:f.value,col:f.from,dir:"neutral",w:0,tw:0,spawn:0,tSpawn:0,bw:.2,tW:.2,dot:1,tDot:1,spread:.35,tSpread:.35,spd:.18,tSpeed:.18,lineA:.08,dotA:.3,carry:Math.random()};
+      setRouteTargets(r,f,n);return r;
+    }
+
+    function stats(){
+      const y=yearVal(),yearTot=app.yearTotals.get(y)||0,vis=app.activeFlows.reduce((s,f)=>s+f.value,0);
+      let inflow=0,outflow=0;if(app.state==="ALL"){inflow=vis;outflow=vis}else{inflow=app.activeFlows.reduce((s,f)=>s+(f.to===app.state?f.value:0),0);outflow=app.activeFlows.reduce((s,f)=>s+(f.from===app.state?f.value:0),0)}
+      const net=inflow-outflow;el.visibleMigrants.textContent=fmtC.format(Math.round(vis));el.visibleCorridors.textContent=fmtN.format(app.activeFlows.length);el.inflowValue.textContent=fmtC.format(Math.round(inflow));el.outflowValue.textContent=fmtC.format(Math.round(outflow));el.netValue.textContent=`${net>=0?"+":""}${fmtC.format(Math.round(net))}`;el.yearVolumeValue.textContent=fmtC.format(Math.round(yearTot));
+      el.netCard.classList.remove("positive","negative");if(net>0)el.netCard.classList.add("positive");else if(net<0)el.netCard.classList.add("negative");
+    }
+    function topList(){
+      el.topCorridors.innerHTML="";
+      const t=app.activeFlows.slice(0,10),max=t.length?t[0].value:1;
+      t.forEach(f=>{
+        const key=`${f.from}|${f.to}`,li=document.createElement("li"),bar=document.createElement("span"),txt=document.createElement("span");
+        bar.className="bar";bar.style.width=`${Math.max(4,(f.value/max)*100)}%`;
+        txt.className="txt";txt.textContent=corridorLabel(f);
+        li.appendChild(bar);li.appendChild(txt);
+        if(app.focusCorridor===key)li.classList.add("active");
+        li.addEventListener("mouseenter",()=>{app.hoverCorridor=key;setContext(corridorLabel(f))});
+        li.addEventListener("mouseleave",()=>{app.hoverCorridor=null;setContext("Hover a state or corridor for detail.")});
+        li.addEventListener("click",()=>{app.focusCorridor=app.focusCorridor===key?null:key;topList()});
+        el.topCorridors.appendChild(li);
+      });
+      if(!t.length){const li=document.createElement("li");li.textContent="No corridors visible for this filter.";el.topCorridors.appendChild(li)}
+    }
+
+    function rebuild(clearParticles=false){
+      if(!app.years.length)return;badges();focusMap();
+      const y=yearVal(),flows=(app.flowsByYear.get(y)||[]).filter(matchFlow).sort((a,b)=>b.value-a.value).slice(0,app.topN),max=flows.length?flows[0].value:1,touched=new Set();app.activeFlows=flows;
+      flows.forEach(f=>{const k=`${f.from}|${f.to}`;touched.add(k);let r=app.routes.get(k);if(!r){r=createRoute(f,max);if(!r)return;app.routes.set(k,r)}else{const nr=createRoute(f,max);if(!nr)return;r.p0=nr.p0;r.p1=nr.p1;r.p2=nr.p2}setRouteTargets(r,f,f.value/max)});
+      if(app.focusCorridor&&!touched.has(app.focusCorridor))app.focusCorridor=null;
+      for(const [k,r] of app.routes.entries())if(!touched.has(k)){r.tw=0;r.tSpawn=0;r.tW=.2;r.tDot=1;r.tSpread=.2;r.tSpeed=.14;r.lineA=.02;r.dotA=.14}
+      if(clearParticles)app.particles=[];
+      stats();topList();
+      const m=app.mode==="both"?"IN + OUT":app.mode.toUpperCase(),s=app.state==="ALL"?"All states":app.state;setStatus(`${y} (P${app.periodIdx+1}/${app.periodCount}) | ${s} | ${m} | ${fmtN.format(app.activeFlows.length)} visible corridors`);
+    }
+
+    function easeRoutes(dt){const t=1-Math.exp(-EASE*dt);for(const [k,r] of app.routes.entries()){r.w+=(r.tw-r.w)*t;r.spawn+=(r.tSpawn-r.spawn)*t;r.bw+=(r.tW-r.bw)*t;r.dot+=(r.tDot-r.dot)*t;r.spread+=(r.tSpread-r.spread)*t;r.spd+=(r.tSpeed-r.spd)*t;if(r.w<.001&&r.tw===0)app.routes.delete(k)}}
+    function spawn(dt){
+      const periodShare=1/app.periodCount,phase=app.periodT/app.periodSec,pulse=.86+.28*Math.sin(Math.PI*phase);
+      for(const r of app.routes.values()){if(r.w<.01)continue;const em=app.focusCorridor&&r.key!==app.focusCorridor?0.35:1;r.carry+=r.spawn*app.density*r.w*dt*periodShare*pulse*em;while(r.carry>=1&&app.particles.length<MAX_PART){r.carry-=1;const lane=r.dir==="in"?-(.08+Math.pow(Math.random(),.7)*.92):r.dir==="out"?.08+Math.pow(Math.random(),.7)*.92:(Math.random()*2-1);app.particles.push({r,t:Math.random()*.03,spd:r.spd*app.speed*(.88+Math.random()*.24),lane,a:r.dotA*(.92+Math.random()*.16)})}}
+    }
+    function drawBackbones(){}
+    function drawDots(dt){
+      ctx.save();ctx.globalCompositeOperation="multiply";
+      for(let i=app.particles.length-1;i>=0;i--){const p=app.particles[i],r=p.r;p.t+=p.spd*dt;if(p.t>=1){app.particles[i]=app.particles[app.particles.length-1];app.particles.pop();continue}
+        const pos=bezP(r,p.t),tan=bezT(r,p.t),spread=r.spread*(r.dir==="neutral"?0.95:0.75),x=pos.x+(-tan.y)*p.lane*spread,y=pos.y+tan.x*p.lane*spread,a=p.a,sz=DOT_RADIUS;
+        ctx.beginPath();ctx.fillStyle=routePaint(r,a);ctx.arc(x,y,sz,0,Math.PI*2);ctx.fill()
+      }
+      ctx.restore();
+    }
+    function stepPeriod(dt){app.periodT+=dt;if(app.periodT<app.periodSec)return false;app.periodT-=app.periodSec;app.periodIdx=(app.periodIdx+1)%app.periodCount;badges();if(app.play&&app.periodIdx===0){app.yearIdx=(app.yearIdx+1)%app.years.length;el.yearSlider.value=String(app.yearIdx);rebuild()}else if(app.periodIdx===0||app.periodIdx===6){setStatus(`${yearVal()} (P${app.periodIdx+1}/${app.periodCount}) | ${app.state==="ALL"?"All states":app.state} | ${app.mode==="both"?"IN + OUT":app.mode.toUpperCase()} | ${fmtN.format(app.activeFlows.length)} visible corridors`)}return true}
+    const clearFrame=()=>{
+      ctx.save();
+      ctx.setTransform(app.dpr,0,0,app.dpr,0,0);
+      ctx.globalCompositeOperation="destination-out";
+      ctx.fillStyle="rgba(0,0,0,0.14)";
+      ctx.fillRect(0,0,app.w,app.h);
+      ctx.restore();
+    }
+    let last=performance.now();function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;stepPeriod(dt);clearFrame();easeRoutes(dt);drawBackbones();spawn(dt);drawDots(dt);requestAnimationFrame(frame)}
+
+    function indexFlows(rows){
+      const byYear=new Map(),totBy=new Map(),yearTot=new Map(),states=new Set();let skipped=0;
+      rows.forEach(row=>{const y=parseInt((row.year_start||"").trim(),10),v=parseFloat(row.estimate),from=(row.from_state||"").trim(),to=(row.to_state||"").trim();if(!Number.isFinite(y)||!Number.isFinite(v)||v<=0||!from||!to||from===to){skipped++;return}if(!app.centroids.has(from)||!app.centroids.has(to)){skipped++;return}
+        const f={year:y,from,to,value:v};if(!byYear.has(y))byYear.set(y,[]);byYear.get(y).push(f);if(!totBy.has(y))totBy.set(y,new Map());const m=totBy.get(y);if(!m.has(from))m.set(from,{in:0,out:0});if(!m.has(to))m.set(to,{in:0,out:0});m.get(from).out+=v;m.get(to).in+=v;yearTot.set(y,(yearTot.get(y)||0)+v);states.add(from);states.add(to)
+      });
+      for(const [y,f] of byYear.entries())f.sort((a,b)=>b.value-a.value),byYear.set(y,f);
+      app.skipped=skipped;return{byYear,totBy,yearTot,states:[...states].sort((a,b)=>a.localeCompare(b)),years:[...byYear.keys()].sort((a,b)=>a-b)}
+    }
+
+    function populate(){
+      el.stateSelect.innerHTML="";const all=document.createElement("option");all.value="ALL";all.textContent="All States";el.stateSelect.appendChild(all);
+      [...app.statesSet].sort((a,b)=>a.localeCompare(b)).forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;el.stateSelect.appendChild(o)});
+      el.yearSlider.min="0";el.yearSlider.max=String(Math.max(0,app.years.length-1));el.yearSlider.value=String(app.yearIdx);el.stateSelect.value=app.state;el.modeSelect.value=app.mode;el.topNSlider.value=String(app.topN);el.densitySlider.value=String(app.density.toFixed(1));el.speedSlider.value=String(app.speed.toFixed(1));badges()
+    }
+    function resize(){
+      app.w=stage.clientWidth;app.h=stage.clientHeight;app.dpr=Math.max(1,window.devicePixelRatio||1);
+      canvas.width=Math.round(app.w*app.dpr);canvas.height=Math.round(app.h*app.dpr);canvas.style.width=`${app.w}px`;canvas.style.height=`${app.h}px`;ctx.setTransform(app.dpr,0,0,app.dpr,0,0);ctx.clearRect(0,0,app.w,app.h);
+      base.attr("viewBox",`0 0 ${app.w} ${app.h}`);ov.attr("viewBox",`0 0 ${app.w} ${app.h}`);
+      app.projection.fitSize([app.w,app.h],app.nation);app.path=d3.geoPath(app.projection);recalcCentroids();drawMap();app.routes.clear();app.particles=[];rebuild(true)
+    }
+    function events(){
+      el.yearSlider.addEventListener("input",()=>{app.yearIdx=parseInt(el.yearSlider.value,10)||0;app.periodIdx=0;app.periodT=0;rebuild()});
+      el.playBtn.addEventListener("click",togglePlay);
+      el.resetBtn.addEventListener("click",()=>{stopPlay();app.state="ALL";app.mode="both";app.topN=180;app.density=1.6;app.speed=1;app.yearIdx=Math.max(0,app.years.length-1);app.periodIdx=0;app.periodT=0;app.focusCorridor=null;app.hoverCorridor=null;setContext("Hover a state or corridor for detail.");el.stateSelect.value=app.state;el.modeSelect.value=app.mode;el.topNSlider.value=String(app.topN);el.densitySlider.value=app.density.toFixed(1);el.speedSlider.value=app.speed.toFixed(1);el.yearSlider.value=String(app.yearIdx);rebuild()});
+      el.clearCorridorBtn.addEventListener("click",()=>{app.focusCorridor=null;app.hoverCorridor=null;setContext("Hover a state or corridor for detail.");topList()});
+      el.stateSelect.addEventListener("change",()=>{app.state=el.stateSelect.value;rebuild()});
+      el.modeSelect.addEventListener("change",()=>{app.mode=el.modeSelect.value;rebuild()});
+      el.topNSlider.addEventListener("input",()=>{app.topN=parseInt(el.topNSlider.value,10)||180;rebuild()});
+      el.densitySlider.addEventListener("input",()=>{app.density=parseFloat(el.densitySlider.value)||1;badges()});
+      el.speedSlider.addEventListener("input",()=>{app.speed=parseFloat(el.speedSlider.value)||1;badges()});
+      window.addEventListener("resize",resize);
+    }
+
+    async function init(){
+      try{
+        const [us,csv]=await Promise.all([d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json"),d3.text("./state_to_state_migration_normalized.csv")]);
+        app.nation=topojson.feature(us,us.objects.nation);
+        app.states=topojson.feature(us,us.objects.states).features.map(f=>({...f,properties:{...(f.properties||{}),name:FIPS[String(f.id).padStart(2,"0")]||null}})).filter(f=>f.properties.name!==null);
+        app.projection.fitSize([stage.clientWidth,stage.clientHeight],app.nation);app.path=d3.geoPath(app.projection);recalcCentroids();
+        const rows=d3.csvParse(csv),idx=indexFlows(rows);app.flowsByYear=idx.byYear;app.totalsByYearState=idx.totBy;app.yearTotals=idx.yearTot;app.years=idx.years;app.statesSet=new Set(idx.states);app.colors=makeColors(idx.states);app.yearIdx=Math.max(0,app.years.length-1);
+        populate();events();resize();setStatus(`Loaded ${fmtN.format(rows.length-app.skipped)} usable rows across ${app.years.length} years.`);requestAnimationFrame(frame);
+      }catch(err){console.error(err);setStatus("Could not load data. Use: python -m http.server 8787")}
+    }
+    init();
+  </script>
+</body>
+</html>
